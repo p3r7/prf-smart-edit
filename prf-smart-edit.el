@@ -210,6 +210,20 @@ Only works for single line strings"
     (message "W: used selection/kill-trim while no active region") ) )
 
 
+;; ----------------------------------
+
+;;  - Buffer
+
+(defun buffer/copy ()
+  "Copy whole buffer"
+  (interactive)
+  (save-excursion
+    (mark-whole-buffer)
+    (copy-region-as-kill 1 (buffer-size))))
+
+(global-set-key (kbd "M-W") 'buffer/copy)
+
+
 ;; -------------------------------------------------------------------------
 
 ;; COPY
