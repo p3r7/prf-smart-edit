@@ -511,23 +511,22 @@ With negative N, comment out original line and use the absolute value."
 (defun rename-file-and-buffer (&optional new-name)
   "Renames both current buffer and file it is visiting to NEW-NAME."
   (interactive)
-  ;; TODO: Determine name from buffer-file-name, as nome modes (e.g. polymode)
-  ;; override temporarily the buffer-name.
-  (let ((name (buffer-name))
-        (filename (buffer-file-name)))
+  (let* ((buffer-name (buffer-name))
+         (filename (buffer-file-name))
+         (filename-nd (file-name-nondirectory filename)))
 
     (unless (and filename
                  (file-exists-p filename))
-      (error "Buffer '%s' is not visiting a file!" name))
+      (error "Buffer '%s' is not visiting a file!" buffer-name))
 
     (unless new-name
-      ;; REVIEW: doc says that 2nd argumetn should not be used anymore
-      (setq new-name (read-string "New name: " name)))
+      ;; REVIEW: doc says that 2nd argument should not be used anymore
+      (setq new-name (read-string "New name: " filename-nd)))
 
     (when (file-exists-p new-name)
       (error "A file named '%s' already exists!" new-name))
 
-    (rename-file name new-name 1)
+    (rename-file filename-nd new-name 1)
     (rename-buffer new-name)
     (set-visited-file-name new-name)
     (set-buffer-modified-p nil)))
