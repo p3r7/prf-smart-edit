@@ -506,27 +506,32 @@ With negative N, comment out original line and use the absolute value."
 
 ;; FILE / BUFFER manipulation
 
-;; TODO: use those instead https://github.com/purcell/emacs.d/blob/master/lisp/init-utils.el
+;; NB: gotten & adapted from https://github.com/purcell/emacs.d/blob/master/lisp/init-utils.el
 
-;; [[http://www.cabochon.com/~stevey/blog-rants/my-dot-emacs-file.html]]
-;; TODO:
-;; - write original name by default
-;; - autocomplete
-(defun rename-file-and-buffer (new-name)
+(defun rename-file-and-buffer (&optional new-name)
   "Renames both current buffer and file it is visiting to NEW-NAME."
-  (interactive "sNew name: ")
+  (interactive)
+  ;; TODO: Determine name from buffer-file-name, as nome modes (e.g. polymode)
+  ;; override temporarily the buffer-name.
   (let ((name (buffer-name))
         (filename (buffer-file-name)))
-    (if (not filename)
-        (message "Buffer '%s' is not visiting a file!" name)
-      (if (get-buffer new-name)
-          (message "A buffer named '%s' already exists!" new-name)
-        (progn
-          (rename-file name new-name 1)
-          (rename-buffer new-name)
-          (set-visited-file-name new-name)
-          (set-buffer-modified-p nil))))))
-(global-set-key "\C-x\ W" 'rename-file-and-buffer)
+
+    (unless (and filename
+                 (file-exists-p filename))
+      (error "Buffer '%s' is not visiting a file!" name))
+
+    (unless new-name
+      ;; REVIEW: doc says that 2nd argumetn should not be used anymore
+      (setq new-name (read-string "New name: " name)))
+
+    (when (file-exists-p new-name)
+      (error "A file named '%s' already exists!" new-name))
+
+    (rename-file name new-name 1)
+    (rename-buffer new-name)
+    (set-visited-file-name new-name)
+    (set-buffer-modified-p nil)))
+(global-set-key "\C-x\ W" #'rename-file-and-buffer)
 
 
 ;; -------------------------------------------------------------------------
