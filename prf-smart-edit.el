@@ -1,264 +1,215 @@
-;;; prf-smart-edit.el --- drastic changes of emacs edit behaviour
+;;; prf-smart-edit.el --- Saner alternative to default commands -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2015 Worney Renth <contact.perf@gmail.com>
+;; Copyright (C) 2022 Jordan Besly
 ;;
-;; Version: 20130407.1256
-;; X-Original-Version: 2.5
-;; Created: July 27, 2010
+;; Version: 0.0.1
 ;; Keywords: convenience, files, matching
-;; Compatibility: GNU Emacs 22, 23, and 24
+;; URL: https://github.com/p3r7/prf-smart-edit
+;; Package-Requires: ((emacs "27.1"))
 ;;
-;; Permission is hereby granted to use and distribute this code, with or
-;; without modifications, provided that this copyright notice is copied with
-;; it. Like anything else that's free, lusty-explorer.el is provided *as is*
-;; and comes with no warranty of any kind, either expressed or implied. In no
-;; event will the copyright holder be liable for any damages resulting from
-;; the use of this software.
+;; SPDX-License-Identifier: MIT
 
 ;; Future improvements:
-;; - indent when pasting
 ;; - delete w/ no save case C-w on empty line
-;; - use prog-mode-hook and fallback to list, case version < 24
-;; - better multiple comment (same level as previous comment instead of indent)
-;;   particularly painfull in elisp
-;;   http://endlessparentheses.com/implementing-comment-line.html
-;; - kill-region shortcut
 ;; - backward-kill-word as well ?
-
-;; Several implementations are possible
-;; - defadvice, said to be buggy
-;; - define another function and override default keys
+;; - support for rectangular selection?
+;;   C-<ret>, C-x r r (copy-rectangle-to-register), C-x r k (kill-rectangle) & C-x r y (yank-rectangle)...
 
 
-;; Rectangular selection:
-;; provided by C-<ret>, C-x r r (copy-rectangle-to-register), C-x r k (kill-rectangle) & C-x r y (yank-rectangle)
-;; TODO: state var telling if last kill was on a rectangle,
-;; yank-rectangle instead of regular yank if case
+ ;; CONFIGURATION
 
-;; [[http://ergoemacs.org/emacs/elisp_all_about_lines.html]]
+(defvar smed-indent-after-kill t "Whether to indent after doing a kill.")
 
 
-;; inspo:
-;; http://stackoverflow.com/questions/1551854/emacs-comment-region-in-c-mode
-;; http://stackoverflow.com/questions/6909292/getting-emacs-m-to-produce-style-comments
+
+;; CORE - STRINGS
 
-
-;; -------------------------------------------------------------------------
-
-;; CONFIGURATION
-
-(setq prf-smed/indent-after-kill t)
-
-
-;; -------------------------------------------------------------------------
-
-;; UTILS
-
-;;  - String
-
-(defun string/empty-p (s)
+(defun smed--blank-string-p (s)
   "predicate: only tabs/spaces on current line
 Only works for single line strings"
   ;; if want to select multi-lined string, use [[http://www.emacswiki.org/emacs/MultilineRegexp]]
-  (when (or (string-match "^[ \t]*$" s)  (zerop (length s)) )
-    't ) )
+  (or (string-match "^[ \t]*$" s)
+            (zerop (length s))))
 
 
-;; ----------------------------------
+
+;; CORE - REGION
 
-;;  - Line
+(defun smed--region-blank-p ()
+  (unless (use-region-p)
+    (user-error "called `smed--region-blank-p' while no active region"))
+  (let ((text
+	     (buffer-substring (region-beginning) (region-end)) ))
+	(smed--blank-string-p text)))
+
+(defun smed--region-comment ()
+  (comment-or-uncomment-region (region-beginning) (region-end)))
 
 
-(defun empty-line-p ()
+
+;; CORE - LINES
+
+(defun smed--bol ()
+  (if (derived-mode-p 'eshell-mode)
+      (eshell-bol)
+    (beginning-of-line)))
+
+(defun smed--line-empty-p ()
   "predicate: no visible characters in line"
   ;; TODO: get selection and call empty-region-p
-  (let
-      ((text (buffer-substring (line-beginning-position)
-			       (line-end-position) ) ))
-    (string/empty-p text)
-    )
-  )
+  (let ((text (buffer-substring (line-beginning-position) (line-end-position))))
+    (smed--blank-string-p text)))
 
 
-(defun line/delete ()
-  "Same as kill-line but wo/ kill-ring side effect"
+
+;; COMMANDS - REGION
+
+(defun smed-region-delete ()
+  "Delete the region."
+  (interactive)
+  (unless (use-region-p)
+    (user-error "called `smed-region-delete' while no active region"))
+  (delete-region (region-beginning) (region-end)))
+
+(defun smed-region-kill-ring-save ()
+  "kill-ring-save the region."
+  (interactive)
+  (unless (region-active-p)
+    (user-error "called `smed-region-kill-ring-save' while no active region"))
+  (kill-ring-save (region-beginning) (region-end)))
+
+(defun smed-region-kill-ring-save-trim ()
+  "kill-ring-save the active region, trimming begining spaces and tabs"
+  (interactive)
+  (unless (region-active-p)
+    (user-error "called `smed-region-kill-ring-save-trim' while no active region"))
+  (if (< (mark) (point))
+	  (progn
+	    ;;(cua-exchange-point-and-mark)
+	    ;; REVIEW: really needed, could just use region-beginning & region-end ?
+	    (exchange-point-and-mark)
+	    (kill-ring-save (progn (skip-chars-forward " \t") (point))
+			            (region-end))
+	    (exchange-point-and-mark))
+	;; else
+	(kill-ring-save (progn (skip-chars-forward " \t") (point))
+			        (region-end))))
+
+(defun smed-region-kill ()
+  "kill-region on active region"
+  (interactive)
+  (unless (region-active-p)
+    (user-error "called `smed-region-kill' while no active region"))
+  (kill-region (region-beginning) (region-end)))
+
+;; TODO: rewrite w/ trimming done w/ dash & s
+(defun smed-region-kill-trim ()
+  "Calls `kill-region' on active region, trimming begining spaces and tabs"
+  (interactive)
+  (unless (region-active-p)
+    (user-error "called `smed-region-kill-trim' while no active region"))
+  (if (< (mark) (point))
+	  (progn
+        ;; REVIEW: really needed, could just use region-beginning & region-end ?
+	    (exchange-point-and-mark)
+	    (kill-region (progn (skip-chars-forward " \t") (point))
+			         (region-end))
+	    ;; (exchange-point-and-mark) ) ;; useless
+	    )
+	;; else
+	(kill-region (progn (skip-chars-forward " \t") (point))
+		         (region-end))))
+
+
+
+;; COMMANDS - LINE
+
+(defun smed-next-line ()
+  "Like `next-line' but taking into account `visual-line-mode'."
+  (interactive)
+  (let ((max-col-point (current-column)))
+    (end-of-line)
+    (forward-line)
+    (move-to-column max-col-point)))
+
+(defun smed-line-delete ()
+  "Same as `kill-line' but wo/ the save in `kill-ring' side effect."
   (interactive)
   (delete-region (point) (progn (forward-line 1)
                                 (forward-char -1)
-                                (point))) )
+                                (point))))
 
-
-(defun line/delete-whole ()
-  "Same as kill-whole-line but wo/ kill-ring side effect"
+(defun smed-line-delete-whole ()
+  "Same as `kill-whole-line' but wo/ the save in `kill-ring' side effect."
   (interactive)
   (delete-region (progn (forward-line 0) (point))
-                 (progn (forward-line 1) (point))) )
+                 (progn (forward-line 1) (point))))
 
 
-(defun line/kill-ring-save ()
-  "Copy current line in kill-ring"
+(defun smed-line-kill-ring-save ()
+  "Copy current line in `kill-ring' without killing."
   (interactive)
   (kill-ring-save (line-beginning-position) (line-beginning-position 2)) )
 ;; NOTE: we could have an optionnal param to tel wether get \n or not
 
 
-(defun line/kill-ring-save-trim ()
-  "Copy current line in kill-ring, trimming begining spaces and tabs"
+(defun smed-line-kill-ring-save-trim ()
+  "Copy current line in kill-ring, trimming begining spaces and tabs."
   (interactive)
-  (if (not (empty-line-p))
+  (if (not (smed--line-empty-p))
       (progn
 	(beginning-of-line)
 	(kill-ring-save (progn (skip-chars-forward " \t") (point))
 			(line-beginning-position 2))
 	;;(exchange-point-and-mark)
-	(beginning-of-line) ) ) )
+	(beginning-of-line))))
 
-
-(defun line/kill ()
-  "kill current line"
+(defun smed-line-kill ()
+  "Kill current line."
   (interactive)
-  (if (empty-line-p)
-      (line/delete-whole)
+  (if (smed--line-empty-p)
+      (smed-line-delete-whole)
     (progn
       (kill-region (line-beginning-position) (line-beginning-position 2))
-      (if prf-smed/indent-after-kill
-	  (indent-according-to-mode))) ) )
+      (when smed-indent-after-kill
+	    (indent-according-to-mode)))))
 
 
-(defun line/kill-trim ()
-  "kill current line, trimming begining spaces and tabs"
+(defun smed-line-kill-trim ()
+  "Kill current line, trimming begining spaces and tabs."
   (interactive)
-  (if (empty-line-p)
-      (line/delete-whole)
+  (if (smed--line-empty-p)
+      (smed-line-delete-whole)
     (progn
       (beginning-of-line)
       (kill-region (progn (skip-chars-forward " \t") (point))
 		   (line-beginning-position 2))
-      (if prf-smed/indent-after-kill
-	  (indent-according-to-mode)) ) ) )
+      (when smed-indent-after-kill
+	    (indent-according-to-mode)))))
 
-
-;; ----------------------------------
-
-;;  - Selection
-
-(defun selection/empty-p ()
-  (if (use-region-p)
-      (let ((text
-	     (buffer-substring (region-beginning) (region-end)) ))
-	(string/empty-p text) )
-    (message "W: used selection/empty-p while no active region") ) )
-
-
-(defun selection/delete ()
-  "Deletes the active selection"
+(defun smed-line-comment ()
   (interactive)
-  (if (use-region-p)
-      (delete-region (region-beginning) (region-end))
-    (message "W: used selection/delete while no active region") ) )
+  (comment-or-uncomment-region (line-beginning-position) (line-beginning-position 2)))
 
 
-(defun selection/kill-ring-save ()
-  "kill-ring-save the active region"
+
+;; COMANDS - COPY
+
+(defun smed-copy-line-or-region ()
+  "Copy current line or region."
   (interactive)
   (if (region-active-p)
-      (kill-ring-save (region-beginning) (region-end))
-    (message "W: used selection/kill-ring-save while no active region") ) )
+      (smed-region-kill-ring-save)
+    (smed-line-kill-ring-save-trim)))
 
-
-(defun selection/kill-ring-save-trim ()
-  "kill-ring-save the active region, trimming begining spaces and tabs"
-  (interactive)
-  (if (region-active-p)
-      (if (< (mark) (point))
-	  (progn
-	    ;;(cua-exchange-point-and-mark)
-	    ;; TODO: really needed, could just use region-beginning & region-end ?
-	    (exchange-point-and-mark)
-	    (kill-ring-save (progn (skip-chars-forward " \t") (point))
-			    (region-end))
-	    (exchange-point-and-mark))
-	;; else
-	(kill-ring-save (progn (skip-chars-forward " \t") (point))
-			(region-end)) )
-    (message "W: used selection/kill-ring-save-trim while no active region")
-    ) )
-
-
-(defun selection/kill ()
-  "kill-region on active region"
-  (interactive)
-  (if (region-active-p)
-      (kill-region (region-beginning) (region-end))
-    (message "W: used selection/kill while no active region") ) )
-
-
-(defun selection/kill-trim ()
-  "kill-region on active region, trimming begining spaces and tabs"
-  (interactive)
-  (if (region-active-p)
-      (if (< (mark) (point))
-	  (progn
-	    (exchange-point-and-mark)
-	    (kill-region (progn (skip-chars-forward " \t") (point))
-			 (region-end))
-	    ;; (exchange-point-and-mark) ) ;; useless
-	    )
-	;; else
-	(kill-region (progn (skip-chars-forward " \t") (point))
-		     (region-end)) )
-    (message "W: used selection/kill-trim while no active region") ) )
-
-
-;; ----------------------------------
-
-;;  - Buffer
-
-(defun buffer/copy ()
+(defun smed-copy-buffer ()
   "Copy whole buffer"
   (interactive)
   (save-excursion
-    (mark-whole-buffer)
+    (call-interactively #'mark-whole-buffer)
     (copy-region-as-kill 1 (buffer-size))))
 
-(global-set-key (kbd "M-W") 'buffer/copy)
-
-
-;; -------------------------------------------------------------------------
-
-;; COPY
-
-;; M-w
-;; - no selection -> copies line
-;; - selection    -> copies it
-
-;; http://ergoemacs.org/emacs/emacs_copy_cut_current_line.html
-
-;; other implementation: http://emacsblog.org/2009/05/18/copying-lines-not-killing/
-
-;; Defadvice implementation
-
-;; (defadvice kill-ring-save (before slickcopy activate compile)
-;;   "When called interactively with no active region, copy a single line instead."
-;;   (interactive
-;;    (if mark-active (list (region-beginning) (region-end))
-;;      (list (line-beginning-position)
-;;            (line-beginning-position 2)))))
-
-
-(defun copy-line-or-region ()
-  "Copy current line or current text selection."
-  (interactive)
-  (if (region-active-p)
-      (selection/kill-ring-save)
-    ;; else
-    (line/kill-ring-save-trim) ) )
-
-
-
-;; Org-mode version
-
-(defun copy-line-or-region-org ()
+(defun smed-copy-line-or-region-org ()
   ;; NB: doesn't insert a line (unlike standard version)
   ;; org-copy-special does it for whole subtree, and inserts it perfectly
   "Copy the current line or current text selection."
@@ -270,55 +221,22 @@ Only works for single line strings"
       (skip-chars-forward " \t")
       (cua-set-mark)
       (org-end-of-line)
-      (copy-line-or-region)
-      (org-beginning-of-line)) ) )
+      (smed-copy-line-or-region)
+      (org-beginning-of-line))))
 
 
-;; (add-hook 'org-mode-hook
-;;  	  '(lambda()
-;; 	     (define-key org-mode-map (kbd "M-w") 'copy-line-or-region-org)  ) )
+
+;; COMMANDS - KILL (CUT)
 
-
-
-;; -------------------------------------------------------------------------
-
-;; KILL / CUT
-
-;; C-w
-;; - no selection -> kills line
-;; - selection    -> kills it
-
-
-;; Defadvice implementation
-
-;; (defadvice kill-region (before slickcut activate compile)
-;;   "When called interactively with no active region, kill a single line instead."
-;;   (interactive
-;;    (if mark-active (list (region-beginning) (region-end))
-;;      (list (line-beginning-position)
-;;            (line-beginning-position 2)))))
-
-
-(defun cut-line-or-region ()
+(defun smed-kill-line-or-region ()
   "Cut the current line or current text selection and trim begining whitespaces."
   (interactive)
   (if (region-active-p)
-      (selection/kill)
-    ;;else
-    (line/kill-trim)
-    ;;NOTE: deletes remaining white spaces after kill
-    ;; not necessary as it gets deleted when saving
-    ;;    (if (not (bolp))
-    ;;	(delete-region (point) (progn (skip-chars-forward " \t") (point))))
-    )
-  )
+      (smed-region-kill)
+    (smed-line-kill-trim)))
 
 
-
-
-;; Org-mode version
-
-(defun cut-line-or-region-org ()
+(defun smed-kill-line-or-region-org ()
   ;; NB: leaves an empty line (unlike standard version)
   ;; org-cut-special does it for whole subtree wo/ leaving an empty line
   "Cut the current line, or current text selection."
@@ -328,131 +246,13 @@ Only works for single line strings"
     (progn
       (org-beginning-of-line)
       ;; (skip-chars-forward " \t")
-      (org-kill-line) ) ) )
-
-;; (add-hook 'org-mode-hook
-;;  	  '(lambda()
-;; 	     (define-key org-mode-map (kbd "C-w") 'cut-line-or-region-org) ) )
+      (org-kill-line))))
 
 
+
+;; COMMANDS - DUPLICATE
 
-;; -------------------------------------------------------------------------
-
-;; (TOGGLE) COMMENT
-
-;; C-<f8>
-;; - no selection -> kills line
-;; - selection    -> kills it
-
-
-;; Defadvice implementation
-
-;; (defadvice comment-or-uncomment-region (before slickccomment activate compile)
-;;   "When called interactively with no active region, kill a single line instead."
-;;   (interactive
-;;    (if mark-active (list (region-beginning) (region-end))
-;;      (list (line-beginning-position)
-;;            (line-beginning-position 2)))))
-;; - 2nd method: redefine functions and rebind keys
-
-
-(defun comment-or-uncomment-line-or-region () ;;TODO: rename toggle-comment
-  "Toggle comment on the current line, or current text selection."
-  (interactive)
-  (if (region-active-p)
-      (comment-or-uncomment-region (region-beginning) (region-end))
-    (progn
-      (comment-or-uncomment-region (line-beginning-position) (line-beginning-position 2))
-      (next-visual-line) ) ) )
-
-
-
-
-;; C languages
-
-(defun comment-or-uncomment-line-or-region-c ()
-  "Toggle comment on the current line, or current text selection."
-  (interactive)
-  (if (region-active-p)
-      (progn
-	(if (eq major-mode 'c-mode)
-	    (setq comment-style 'multi-line
-		  comment-start "/* "
-		  comment-end   " */")
-	  )
-	(comment-or-uncomment-region (region-beginning) (region-end)) )
-    (progn
-      (if (eq major-mode 'c-mode)
-	  (setq comment-style 'indent
-		comment-start "// "
-		comment-end   "") )
-      (comment-or-uncomment-region (line-beginning-position) (line-beginning-position 2))
-      (next-visual-line)
-      ) ) )
-
-(add-hook 'c-mode-common-hook
- 	  '(lambda()
-	     (local-set-key (kbd "C-<f8>") 'comment-or-uncomment-line-or-region-c)
-	     (local-set-key (kbd "<C-kp-divide>") 'comment-or-uncomment-line-or-region-c)
-	     ) )
-
-
-;; -------------------------------------------------------------------------
-
-;; Auto-indent
-
-
-;; - after new line
-
-;; NB: for c-mode-common-hook, it gets overriden by the completion advices, and thus must be defined after the later being called
-(mapc
- (lambda (mode)
-   (let ((mode-hook (intern (concat (symbol-name mode) "-hook"))))
-     (add-hook mode-hook (lambda nil (local-set-key (kbd "RET") 'newline-and-indent)))))
- '(ada-mode cperl-mode emacs-lisp-mode html-mode lisp-mode perl-mode
-	    web-mode
-            php-mode prolog-mode ruby-mode scheme-mode sgml-mode sh-mode sml-mode tuareg-mode web-mode))
-
-
-;; - after yank
-;; [[http://emacswiki.org/emacs/AutoIndentation]]
-
-(dolist (command '(yank yank-pop))
-  (eval `(defadvice ,command (after indent-region activate)
-	   (and (not current-prefix-arg)
-		(member major-mode '(emacs-lisp-mode lisp-mode
-						     clojure-mode    scheme-mode
-						     haskell-mode    ruby-mode
-						     rspec-mode      python-mode
-						     c-mode          c++-mode
-						     objc-mode       latex-mode
-						     php-mode        web-mode
-						     java-mode       javascript-mode
-						     plain-tex-mode)) ;; useless ?
-		(let ((mark-even-if-inactive transient-mark-mode))
-		  (indent-region (region-beginning) (region-end) nil))))))
-
-
-
-;; -------------------------------------------------------------------------
-
-;; Clean too much spaces and blank lines
-
-
-(global-set-key (kbd "C-x C-o")
-		(lambda()(interactive)
-		  (progn
-		    (just-one-space)
-		    (delete-blank-lines) )))
-
-
-
-;; -------------------------------------------------------------------------
-
-;; duplicates line or region, no save in kill ring
-
-
-(defun duplicate-line-or-region (&optional n)
+(defun smed-duplicate-line-or-region (&optional n)
   "Duplicate current line, or region if active.
 With argument N, make N copies.
 With negative N, comment out original line and use the absolute value."
@@ -465,7 +265,7 @@ With negative N, comment out original line and use the absolute value."
                       (end-of-line)
                       (if (< 0 (forward-line 1)) ;Go to beginning of next line, or make a new one
                           (newline))))))
-        (dotimes (i (abs (or n 1)))     ;Insert N times, or once if not specified
+        (dotimes (_ (abs (or n 1)))     ;Insert N times, or once if not specified
           (insert text))))
     (if use-region nil                  ;Only if we're working with a line (not a region)
       (let ((pos (- (point) (line-beginning-position)))) ;Save column
@@ -475,40 +275,50 @@ With negative N, comment out original line and use the absolute value."
         (forward-char pos)))))
 
 
-;; -------------------------------------------------------------------------
+
+;; COMMANDS - COMMENT
 
-;; SEARCH / REPLACE
-
-(defun replace-string-whole-buffer ()
-  "Whole buffer version of replace-string"
+(defun smed-toggle-comment ()
+  "Toggle comment on the current line, or current text selection."
   (interactive)
-  (save-excursion
-    (beginning-of-buffer)
-    (call-interactively 'replace-string)))
+  (if (region-active-p)
+      (smed--region-comment)
+    (progn
+      (smed-line-comment)
+      (smed-next-line))))
 
-
-;; -------------------------------------------------------------------------
-
-;; NAVIGATION
-
-(defun next-visual-line ()
-  "next-line but taking into account visual-line-mode"
+(defun smed-toggle-comment-c ()
+  "Toggle comment on the current line, or current text selection."
   (interactive)
-  (let ( (max-col-point (current-column)) )
-    (end-of-line)
-    (next-line)
-    (move-to-column max-col-point)
-    )
-  )
+
+  (unless (derived-mode-p 'c-mode)
+    (user-error "Attempted to call `smed-toggle-comment-c' on a non-C-style buffer."))
+
+  (if (region-active-p)
+	  (let ((comment-style 'multi-line)
+            (comment-start "/* ")
+            (comment-end   " */"))
+	    (smed--region-comment))
+	(let ((comment-style 'indent)
+		  (comment-start "// ")
+		  (comment-end   ""))
+      (smed-line-comment)
+      (smed-next-line))))
 
 
-;; -------------------------------------------------------------------------
+
+;; COMMANDS - TRIM
 
-;; FILE / BUFFER manipulation
+(defun smed-trim-here ()
+  (interactive)
+  (just-one-space)
+  (delete-blank-lines))
 
-;; NB: gotten & adapted from https://github.com/purcell/emacs.d/blob/master/lisp/init-utils.el
 
-(defun rename-file-and-buffer (&optional new-name)
+
+;; COMMANDS - FILE NAMES
+
+(defun smed-rename-file-and-buffer (&optional new-name)
   "Renames both current buffer and file it is visiting to NEW-NAME."
   (interactive)
   (let* ((buffer-name (buffer-name))
@@ -530,11 +340,55 @@ With negative N, comment out original line and use the absolute value."
     (rename-buffer new-name)
     (set-visited-file-name new-name)
     (set-buffer-modified-p nil)))
-(global-set-key "\C-x\ W" #'rename-file-and-buffer)
 
 
-;; -------------------------------------------------------------------------
+
+;; COMMANDS - SEARCH / REPLACE
 
+(defun replace-string-whole-buffer ()
+  "Whole buffer version of replace-string"
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (call-interactively 'replace-string)))
+
+
+
+;; AUTO-INDENT
+
+;; REVIEW: just use `aggressive-indent'?
+
+(defun smed-register-auto-indent ()
+  ;; - after new line
+  ;; NB: for c-mode-common-hook, it gets overriden by the completion advices, and thus must be defined after the later being called
+
+  (mapc
+   (lambda (mode)
+     (let ((mode-hook (intern (concat (symbol-name mode) "-hook"))))
+       (add-hook mode-hook (lambda nil (local-set-key (kbd "RET") 'newline-and-indent)))))
+   '(ada-mode cperl-mode emacs-lisp-mode html-mode lisp-mode perl-mode
+	          web-mode
+              php-mode prolog-mode ruby-mode scheme-mode sgml-mode sh-mode sml-mode tuareg-mode web-mode))
+
+  ;; - after yank
+
+  (dolist (command '(yank yank-pop))
+    (eval `(defadvice ,command (after indent-region activate)
+	         (and (not current-prefix-arg)
+		          (member major-mode '(emacs-lisp-mode lisp-mode
+						                               clojure-mode    scheme-mode
+						                               haskell-mode    ruby-mode
+						                               rspec-mode      python-mode
+						                               c-mode          c++-mode
+						                               objc-mode       latex-mode
+						                               php-mode        web-mode
+						                               java-mode       javascript-mode
+						                               plain-tex-mode)) ;; useless ?
+		          (let ((mark-even-if-inactive transient-mark-mode))
+		            (indent-region (region-beginning) (region-end) nil)))))))
+
+
+
 
 (provide 'prf-smart-edit)
 
